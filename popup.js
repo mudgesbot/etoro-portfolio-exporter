@@ -136,9 +136,9 @@ function toTable(data) {
   return table;
 }
 
-// Scrape button
+// Read Portfolio button
 scrapeBtn.addEventListener('click', async () => {
-  setStatus('Scraping portfolio...', 'info');
+  setStatus('Reading portfolio...', 'info');
   scrapeBtn.disabled = true;
   resetPortfolioState();
   
@@ -247,7 +247,7 @@ copyTableBtn.addEventListener('click', async () => {
 // Check if on eToro on load
 chrome.tabs.query({ active: true, currentWindow: true }, ([tab]) => {
   if (tab?.url?.includes('etoro.com/portfolio')) {
-    setStatus('Ready! Click Scrape to export.', 'success');
+    setStatus('Ready! Click "Read Portfolio" to export.', 'success');
   } else if (tab?.url?.includes('etoro.com')) {
     setStatus('Navigate to Portfolio page for best results.', 'info');
   }
