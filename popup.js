@@ -71,7 +71,8 @@ function sanitizeCsvCell(value) {
   if (value === null || value === undefined) return '';
   let str = String(value);
   const trimmed = str.trimStart();
-  if (trimmed && ['=', '+', '-', '@'].includes(trimmed[0])) {
+  // Only sanitize formula injection chars (=, +, @), NOT minus sign (needed for negative numbers)
+  if (trimmed && ['=', '+', '@'].includes(trimmed[0])) {
     str = `'${str}`;
   }
   return str;
@@ -95,6 +96,10 @@ function toCSV(data) {
   const rows = [headers.map(csvEscape).join(',')];
   
   data.positions.forEach(p => {
+    // Use numeric plValue for clean Excel formatting
+    const plValue = p.plValue !== null && p.plValue !== undefined ? p.plValue.toFixed(2) : '';
+    const plPercent = p.plPercent ? `${p.plPercent}%` : '';
+    
     const row = [
       p.symbol || '',
       p.name || '',
@@ -102,8 +107,8 @@ function toCSV(data) {
       p.price || '',
       p.units || '',
       p.avgOpen || '',
-      p.pl || '',
-      p.plPercent ? `${p.plPercent}%` : ''
+      plValue,
+      plPercent
     ];
     rows.push(row.map(csvEscape).join(','));
   });
@@ -111,7 +116,7 @@ function toCSV(data) {
   // Add totals row
   const totalPL = data.positions.reduce((sum, p) => sum + (p.plValue || 0), 0);
   rows.push('');
-  rows.push(['TOTAL', '', '', '', '', '', `€${totalPL.toFixed(2)}`, ''].map(csvEscape).join(','));
+  rows.push(['TOTAL', '', '', '', '', '', totalPL.toFixed(2), ''].map(csvEscape).join(','));
   rows.push(['Generated', data.timestamp, '', '', '', '', '', ''].map(csvEscape).join(','));
   
   return rows.join('\n');
