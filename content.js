@@ -72,6 +72,18 @@
         }
       });
 
+      // Deduplicate identical positions (same symbol + units + avgOpen = same trade)
+      const seen = new Set();
+      result.positions = result.positions.filter(p => {
+        // Create unique key from symbol, units, and avgOpen
+        const key = `${p.symbol}|${p.units}|${p.avgOpen}`;
+        if (seen.has(key)) {
+          return false; // Duplicate
+        }
+        seen.add(key);
+        return true;
+      });
+
       // Calculate totals if we have positions
       if (result.positions.length > 0) {
         let totalPL = 0;
