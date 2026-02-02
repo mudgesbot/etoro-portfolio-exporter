@@ -1,14 +1,24 @@
 # eToro Portfolio Exporter
 
-Chrome extension + AI parser to export your eToro portfolio data.
+Chrome extension to export your eToro portfolio data to Excel, CSV, or JSON.
+
+**Version:** 1.2.0 | **License:** MIT | **Privacy:** 100% local, no data sent anywhere
+
+## Features
+
+- 📊 **Structured Export** — Stocks, ETFs, Crypto, Smart Portfolios
+- 📁 **Multiple Formats** — Excel (.xlsx), CSV, JSON, Clipboard
+- 🔒 **Privacy First** — Runs entirely in your browser
+- 🌍 **International** — Supports EU number formats (1.234,56 and 1,234.56)
+- 📈 **Full Data** — Symbol, units, prices, P&L, invested amount, direction (Long/Short)
 
 ## How It Works
 
-1. **Chrome Extension** captures raw page content (text, tables, numbers)
-2. **AI Parser** extracts structured portfolio data using LLM
-3. **Result**: Clean JSON with all your positions
+1. **Chrome Extension** scrapes your portfolio page with smart pattern matching
+2. **Structured Parser** extracts positions using regex (no CSS selector fragility)
+3. **Export** to your preferred format
 
-This approach is **robust** — it doesn't rely on fragile CSS selectors that break when eToro changes their layout. The AI understands the content semantically.
+Optional: Use the Python AI parser for complex/edge cases.
 
 ## Installation
 
@@ -87,16 +97,45 @@ Add PNG icons to `icons/` folder:
 ## Troubleshooting
 
 **Extension shows "No data captured"**
-- Make sure you're on etoro.com/portfolio
-- Scroll to load all positions first
-- Try refreshing the page
+- Make sure you're on `etoro.com/portfolio` (not the main page)
+- **Scroll down** to load all positions — eToro uses lazy loading!
+- Try refreshing the page and waiting a few seconds
+
+**Some positions missing**
+- eToro lazy-loads content as you scroll
+- Scroll through your entire portfolio before clicking "Scrape"
+- For large portfolios (50+), scroll slowly to ensure everything loads
 
 **AI parsing fails**
 - Check if Ollama is running: `curl localhost:11434/api/tags`
 - Or set `OPENAI_API_KEY` environment variable
 
-## Privacy
+## Privacy & Security
 
 - Extension runs 100% locally in your browser
 - AI parsing can be done locally with Ollama
 - No data sent anywhere unless you explicitly use cloud APIs
+- CSV exports are sanitized against formula injection attacks
+- Content scripts validate message senders to prevent spoofing
+
+## Changelog
+
+### v1.2.0 (2026-02-02)
+**Security & Quality Improvements**
+- 🔒 Added sender validation for Chrome runtime messages
+- 🔒 CSV injection protection (sanitizes `=`, `+`, `-`, `@` prefixes)
+- 🔒 Removed debug exposure (`window.__etoroScraper`)
+- 🌍 EU number format support (both `1,234.56` and `1.234,56`)
+- 📈 Support for Short positions (not just Long)
+- 🐛 Fixed: Multiple trades of same symbol now captured correctly
+- 🐛 Fixed: Header rows no longer appear in position data
+- ✨ Better error handling with UI state reset
+
+### v1.1.0 (2026-02-02)
+- Structured data parsing (stocks, ETFs, crypto, smart portfolios)
+- Excel/CSV export with formatted columns
+- Custom trading chart icon
+
+### v1.0.0 (2026-02-02)
+- Initial release
+- Raw page scraping with AI-assisted parsing
