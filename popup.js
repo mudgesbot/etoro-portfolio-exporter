@@ -7,8 +7,10 @@ const previewEl = document.getElementById('preview');
 const previewTextEl = document.getElementById('previewText');
 
 const scrapeBtn = document.getElementById('scrape');
+const downloadExcelBtn = document.getElementById('downloadExcel');
+const downloadJsonBtn = document.getElementById('downloadJson');
 const copyJsonBtn = document.getElementById('copyJson');
-const downloadBtn = document.getElementById('download');
+const copyTableBtn = document.getElementById('copyTable');
 
 function setStatus(message, type = 'info') {
   statusEl.textContent = message;
@@ -16,35 +18,96 @@ function setStatus(message, type = 'info') {
 }
 
 function enableExportButtons(enabled) {
+  downloadExcelBtn.disabled = !enabled;
+  downloadJsonBtn.disabled = !enabled;
   copyJsonBtn.disabled = !enabled;
-  downloadBtn.disabled = !enabled;
+  copyTableBtn.disabled = !enabled;
 }
 
 function showPreview(data) {
-  let preview = 'Captured for AI parsing:\n';
+  const count = data.positions?.length || 0;
+  let preview = `✅ Found ${count} position(s)\n\n`;
   
-  const textLen = data.visibleText?.length || 0;
-  preview += `• ${textLen.toLocaleString()} chars of text\n`;
-  
-  const tableCount = data.tables?.length || 0;
-  if (tableCount > 0) {
-    preview += `• ${tableCount} table(s)\n`;
+  if (count > 0) {
+    // Show summary
+    let totalPL = 0;
+    let winners = 0;
+    let losers = 0;
+    
+    data.positions.forEach(p => {
+      if (p.plValue > 0) winners++;
+      else if (p.plValue < 0) losers++;
+      totalPL += p.plValue || 0;
+    });
+    
+    preview += `P/L: €${totalPL.toFixed(2)}\n`;
+    preview += `Winners: ${winners} | Losers: ${losers}\n\n`;
+    
+    // Show top positions
+    preview += `Top positions:\n`;
+    data.positions.slice(0, 5).forEach(p => {
+      const pl = p.pl || '€0';
+      const icon = (p.plValue || 0) >= 0 ? '🟢' : '🔴';
+      preview += `${icon} ${p.symbol}: ${pl}\n`;
+    });
+    
+    if (count > 5) {
+      preview += `... and ${count - 5} more`;
+    }
   }
-  
-  const gridCount = data.gridData?.length || 0;
-  if (gridCount > 0) {
-    preview += `• ${gridCount} grid items\n`;
-  }
-  
-  const numCount = data.numbers?.length || 0;
-  if (numCount > 0) {
-    preview += `• ${numCount} numbers found\n`;
-  }
-  
-  preview += '\nCopy JSON and paste to Mudges for parsing!';
   
   previewTextEl.textContent = preview;
   previewEl.style.display = 'block';
+}
+
+function toCSV(data) {
+  if (!data.positions || data.positions.length === 0) {
+    return 'No positions found';
+  }
+  
+  const headers = ['Symbol', 'Name', 'Type', 'Price', 'Units', 'Avg Open', 'P/L', 'P/L %'];
+  const rows = [headers.join(',')];
+  
+  data.positions.forEach(p => {
+    const row = [
+      p.symbol || '',
+      `"${(p.name || '').replace(/"/g, '""')}"`,
+      p.type || '',
+      p.price || '',
+      p.units || '',
+      p.avgOpen || '',
+      p.pl || '',
+      p.plPercent ? `${p.plPercent}%` : ''
+    ];
+    rows.push(row.join(','));
+  });
+  
+  // Add totals row
+  const totalPL = data.positions.reduce((sum, p) => sum + (p.plValue || 0), 0);
+  rows.push('');
+  rows.push(`TOTAL,,,,,,€${totalPL.toFixed(2)},`);
+  rows.push(`Generated,${data.timestamp},,,,,,`);
+  
+  return rows.join('\n');
+}
+
+function toTable(data) {
+  if (!data.positions || data.positions.length === 0) {
+    return 'No positions found';
+  }
+  
+  let table = 'Symbol\tName\tType\tPrice\tUnits\tAvg Open\tP/L\n';
+  table += '─'.repeat(80) + '\n';
+  
+  data.positions.forEach(p => {
+    table += `${p.symbol}\t${p.name}\t${p.type}\t${p.price || '-'}\t${p.units || '-'}\t${p.avgOpen || '-'}\t${p.pl}\n`;
+  });
+  
+  const totalPL = data.positions.reduce((sum, p) => sum + (p.plValue || 0), 0);
+  table += '─'.repeat(80) + '\n';
+  table += `TOTAL\t\t\t\t\t\t€${totalPL.toFixed(2)}\n`;
+  
+  return table;
 }
 
 // Scrape button
@@ -53,7 +116,6 @@ scrapeBtn.addEventListener('click', async () => {
   scrapeBtn.disabled = true;
   
   try {
-    // Get the active tab
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     
     if (!tab.url?.includes('etoro.com')) {
@@ -62,22 +124,21 @@ scrapeBtn.addEventListener('click', async () => {
       return;
     }
     
-    // Send message to content script
     const response = await chrome.tabs.sendMessage(tab.id, { action: 'scrapePortfolio' });
     
     if (response) {
       portfolioData = response;
-      const textLen = response.visibleText?.length || 0;
+      const count = response.positions?.length || 0;
       
-      if (textLen > 100) {
-        setStatus(`✓ Captured ${(textLen/1000).toFixed(1)}K chars`, 'success');
+      if (count > 0) {
+        setStatus(`✓ Found ${count} positions`, 'success');
         enableExportButtons(true);
         showPreview(response);
       } else {
-        setStatus('Not enough content. Try scrolling first.', 'error');
+        setStatus('No positions found. Make sure you\'re on the Portfolio page and scroll to load all positions.', 'error');
       }
     } else {
-      setStatus('No response from page. Refresh and try again.', 'error');
+      setStatus('No response. Try refreshing the page.', 'error');
     }
   } catch (error) {
     console.error('Scrape error:', error);
@@ -87,20 +148,26 @@ scrapeBtn.addEventListener('click', async () => {
   scrapeBtn.disabled = false;
 });
 
-// Copy JSON
-copyJsonBtn.addEventListener('click', async () => {
+// Download Excel (CSV)
+downloadExcelBtn.addEventListener('click', () => {
   if (!portfolioData) return;
   
-  try {
-    await navigator.clipboard.writeText(JSON.stringify(portfolioData, null, 2));
-    setStatus('✓ JSON copied to clipboard!', 'success');
-  } catch (error) {
-    setStatus(`Copy failed: ${error.message}`, 'error');
-  }
+  const csv = toCSV(portfolioData);
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const date = new Date().toISOString().split('T')[0];
+  
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `etoro-portfolio-${date}.csv`;
+  a.click();
+  
+  URL.revokeObjectURL(url);
+  setStatus('✓ CSV downloaded!', 'success');
 });
 
 // Download JSON
-downloadBtn.addEventListener('click', () => {
+downloadJsonBtn.addEventListener('click', () => {
   if (!portfolioData) return;
   
   const blob = new Blob([JSON.stringify(portfolioData, null, 2)], { type: 'application/json' });
@@ -113,14 +180,39 @@ downloadBtn.addEventListener('click', () => {
   a.click();
   
   URL.revokeObjectURL(url);
-  setStatus('✓ Downloaded!', 'success');
+  setStatus('✓ JSON downloaded!', 'success');
 });
 
-// Check if we're on eToro on load
+// Copy JSON
+copyJsonBtn.addEventListener('click', async () => {
+  if (!portfolioData) return;
+  
+  try {
+    await navigator.clipboard.writeText(JSON.stringify(portfolioData, null, 2));
+    setStatus('✓ JSON copied!', 'success');
+  } catch (error) {
+    setStatus(`Copy failed: ${error.message}`, 'error');
+  }
+});
+
+// Copy Table
+copyTableBtn.addEventListener('click', async () => {
+  if (!portfolioData) return;
+  
+  try {
+    const table = toTable(portfolioData);
+    await navigator.clipboard.writeText(table);
+    setStatus('✓ Table copied!', 'success');
+  } catch (error) {
+    setStatus(`Copy failed: ${error.message}`, 'error');
+  }
+});
+
+// Check if on eToro on load
 chrome.tabs.query({ active: true, currentWindow: true }, ([tab]) => {
   if (tab?.url?.includes('etoro.com/portfolio')) {
-    setStatus('Ready to scrape!', 'success');
+    setStatus('Ready! Click Scrape to export.', 'success');
   } else if (tab?.url?.includes('etoro.com')) {
-    setStatus('Navigate to Portfolio page, then scrape.', 'info');
+    setStatus('Navigate to Portfolio page for best results.', 'info');
   }
 });
