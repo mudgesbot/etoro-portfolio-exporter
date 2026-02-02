@@ -5,6 +5,9 @@
   'use strict';
 
   chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+    if (sender?.id !== chrome.runtime.id) {
+      return false;
+    }
     if (request.action === 'scrapePortfolio') {
       const data = scrapePortfolio();
       sendResponse(data);
@@ -27,6 +30,11 @@
     };
 
     try {
+      if (!isPortfolioPage()) {
+        result.errors.push('Not on eToro portfolio page');
+        return result;
+      }
+
       // Get visible text content
       const pageText = document.body.innerText;
       
@@ -37,14 +45,6 @@
         result.portfolio.rawTotals = totalMatch.slice(-4);
       }
 
-      // Find all position rows - look for patterns like "SYMBOL Name Price Change Units..."
-      const positionPatterns = [
-        // Pattern: SYMBOL.XX Name Price Change (%) Units Long AvgOpen P/L
-        /([A-Z0-9]+(?:\.[A-Z]+)?)\s+([^€\d]+?)\s+([\d,.]+)\s+(-?[\d,.]+)\s+\((-?[\d,.]+)%\)\s+([\d,.]+)\s+Long\s+([\d,.]+)\s+(-?€[\d,.]+)/g,
-        // Pattern for Smart Portfolios: Name €P/L
-        /^([A-Za-z-]+)\s+([A-Za-z\s]+)\s+(€[\d,.]+)$/gm
-      ];
-
       // Extract from grid data elements
       const gridItems = document.querySelectorAll('[class*="grid"], [class*="row"], [class*="position"], [class*="instrument"]');
       
@@ -54,25 +54,21 @@
         
         // Skip navigation/header elements
         if (text.includes('Home') && text.includes('Wallet')) return;
-        if (text.includes('Asset') && text.includes('Price') && text.includes('Units')) return;
+        if (isHeaderLine(text)) return;
         
         const position = parsePositionText(text);
         if (position && position.symbol) {
-          // Avoid duplicates
-          if (!result.positions.find(p => p.symbol === position.symbol)) {
-            result.positions.push(position);
-          }
+          result.positions.push(position);
         }
       });
 
       // Also try parsing from full page text
       const lines = pageText.split('\n').filter(l => l.trim());
       lines.forEach(line => {
+        if (isHeaderLine(line)) return;
         const position = parsePositionText(line);
         if (position && position.symbol) {
-          if (!result.positions.find(p => p.symbol === position.symbol)) {
-            result.positions.push(position);
-          }
+          result.positions.push(position);
         }
       });
 
@@ -99,6 +95,7 @@
       symbol: null,
       name: null,
       type: null,
+      direction: null,
       price: null,
       units: null,
       avgOpen: null,
@@ -134,17 +131,18 @@
 
     // Pattern 3: Regular position - "SYMBOL Name Price Change (%) Units Long AvgOpen €P/L"
     // Example: "CEMS.DE iShares Edge MSCI Europe Value Factor UCITS ETF 12.563 0.135 (1.09%) 78.375499 Long 10.980 €138.87"
-    const stockMatch = text.match(/^([A-Z0-9.]+)\s+(.+?)\s+([\d,.]+)\s+(-?[\d,.]+)\s+\((-?[\d,.]+)%\)\s+([\d,.]+)\s+Long\s+([\d,.]+)\s+(-?€[\d,.]+)/);
+    const stockMatch = text.match(/^([A-Z0-9.]+)\s+(.+?)\s+([\d,.]+)\s+(-?[\d,.]+)\s+\((-?[\d,.]+)%\)\s+([\d,.]+)\s+(Long|Short)\s+([\d,.]+)\s+(-?€[\d,.]+)/);
     if (stockMatch) {
       position.symbol = stockMatch[1];
       position.name = stockMatch[2].trim();
-      position.price = parseFloat(stockMatch[3].replace(',', ''));
-      position.change = parseFloat(stockMatch[4].replace(',', ''));
-      position.changePercent = parseFloat(stockMatch[5].replace(',', ''));
-      position.units = parseFloat(stockMatch[6].replace(',', ''));
-      position.avgOpen = parseFloat(stockMatch[7].replace(',', ''));
-      position.pl = stockMatch[8];
-      position.plValue = parseEuroValue(stockMatch[8]);
+      position.price = parseNumber(stockMatch[3]);
+      position.change = parseNumber(stockMatch[4]);
+      position.changePercent = parseNumber(stockMatch[5]);
+      position.units = parseNumber(stockMatch[6]);
+      position.direction = stockMatch[7];
+      position.avgOpen = parseNumber(stockMatch[8]);
+      position.pl = stockMatch[9];
+      position.plValue = parseEuroValue(stockMatch[9]);
       
       // Determine type
       if (position.symbol.includes('.DE') || position.symbol.includes('.L') || position.symbol.includes('.NV')) {
@@ -169,15 +167,16 @@
     }
 
     // Pattern 4: Simpler format without change data
-    const simpleMatch = text.match(/^([A-Z0-9.]+)\s+(.+?)\s+([\d,.]+)\s+([\d,.]+)\s+Long\s+([\d,.]+)\s+(-?€[\d,.]+)/);
+    const simpleMatch = text.match(/^([A-Z0-9.]+)\s+(.+?)\s+([\d,.]+)\s+([\d,.]+)\s+(Long|Short)\s+([\d,.]+)\s+(-?€[\d,.]+)/);
     if (simpleMatch) {
       position.symbol = simpleMatch[1];
       position.name = simpleMatch[2].trim();
-      position.price = parseFloat(simpleMatch[3].replace(',', ''));
-      position.units = parseFloat(simpleMatch[4].replace(',', ''));
-      position.avgOpen = parseFloat(simpleMatch[5].replace(',', ''));
-      position.pl = simpleMatch[6];
-      position.plValue = parseEuroValue(simpleMatch[6]);
+      position.price = parseNumber(simpleMatch[3]);
+      position.units = parseNumber(simpleMatch[4]);
+      position.direction = simpleMatch[5];
+      position.avgOpen = parseNumber(simpleMatch[6]);
+      position.pl = simpleMatch[7];
+      position.plValue = parseEuroValue(simpleMatch[7]);
       position.type = 'Stock';
       return position;
     }
@@ -187,11 +186,54 @@
 
   function parseEuroValue(str) {
     if (!str) return 0;
-    const negative = str.includes('-');
-    const num = parseFloat(str.replace(/[€,\-]/g, '').trim());
-    return negative ? -num : num;
+    const num = parseNumber(str);
+    if (num === null) return 0;
+    return num;
   }
 
-  window.__etoroScraper = { scrapePortfolio, parsePositionText };
+  function parseNumber(value) {
+    if (value === null || value === undefined) return null;
+    let str = String(value).trim();
+    if (!str) return null;
+    const negative = str.includes('-');
+    str = str.replace(/[^0-9,.\-]/g, '');
+    const lastComma = str.lastIndexOf(',');
+    const lastDot = str.lastIndexOf('.');
+
+    if (lastComma !== -1 && lastDot !== -1) {
+      if (lastComma > lastDot) {
+        str = str.replace(/\./g, '').replace(',', '.');
+      } else {
+        str = str.replace(/,/g, '');
+      }
+    } else if (lastComma !== -1) {
+      if (/,\d{1,2}$/.test(str)) {
+        str = str.replace(',', '.');
+      } else {
+        str = str.replace(/,/g, '');
+      }
+    } else if (lastDot !== -1) {
+      if (!/\.\d{1,2}$/.test(str)) {
+        str = str.replace(/\./g, '');
+      }
+    }
+
+    const num = parseFloat(str);
+    if (Number.isNaN(num)) return null;
+    if (negative && num > 0) return -num;
+    return num;
+  }
+
+  function isPortfolioPage() {
+    return window.location.href.includes('etoro.com/portfolio');
+  }
+
+  function isHeaderLine(text) {
+    const line = text.toLowerCase();
+    if (line.includes('asset') && line.includes('price') && line.includes('units')) return true;
+    if (line.includes('p/l') && line.includes('open')) return true;
+    if (line.includes('buy') && line.includes('sell') && line.includes('trade')) return true;
+    return false;
+  }
   console.log('eToro Portfolio Exporter loaded');
 })();

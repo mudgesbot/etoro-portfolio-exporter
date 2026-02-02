@@ -24,6 +24,13 @@ function enableExportButtons(enabled) {
   copyTableBtn.disabled = !enabled;
 }
 
+function resetPortfolioState() {
+  portfolioData = null;
+  enableExportButtons(false);
+  previewEl.style.display = 'none';
+  previewTextEl.textContent = '';
+}
+
 function showPreview(data) {
   const count = data.positions?.length || 0;
   let preview = `✅ Found ${count} position(s)\n\n`;
@@ -60,18 +67,37 @@ function showPreview(data) {
   previewEl.style.display = 'block';
 }
 
+function sanitizeCsvCell(value) {
+  if (value === null || value === undefined) return '';
+  let str = String(value);
+  const trimmed = str.trimStart();
+  if (trimmed && ['=', '+', '-', '@'].includes(trimmed[0])) {
+    str = `'${str}`;
+  }
+  return str;
+}
+
+function csvEscape(value) {
+  const sanitized = sanitizeCsvCell(value);
+  const escaped = sanitized.replace(/"/g, '""');
+  if (/[",\n]/.test(escaped)) {
+    return `"${escaped}"`;
+  }
+  return escaped;
+}
+
 function toCSV(data) {
   if (!data.positions || data.positions.length === 0) {
     return 'No positions found';
   }
   
   const headers = ['Symbol', 'Name', 'Type', 'Price', 'Units', 'Avg Open', 'P/L', 'P/L %'];
-  const rows = [headers.join(',')];
+  const rows = [headers.map(csvEscape).join(',')];
   
   data.positions.forEach(p => {
     const row = [
       p.symbol || '',
-      `"${(p.name || '').replace(/"/g, '""')}"`,
+      p.name || '',
       p.type || '',
       p.price || '',
       p.units || '',
@@ -79,14 +105,14 @@ function toCSV(data) {
       p.pl || '',
       p.plPercent ? `${p.plPercent}%` : ''
     ];
-    rows.push(row.join(','));
+    rows.push(row.map(csvEscape).join(','));
   });
   
   // Add totals row
   const totalPL = data.positions.reduce((sum, p) => sum + (p.plValue || 0), 0);
   rows.push('');
-  rows.push(`TOTAL,,,,,,€${totalPL.toFixed(2)},`);
-  rows.push(`Generated,${data.timestamp},,,,,,`);
+  rows.push(['TOTAL', '', '', '', '', '', `€${totalPL.toFixed(2)}`, ''].map(csvEscape).join(','));
+  rows.push(['Generated', data.timestamp, '', '', '', '', '', ''].map(csvEscape).join(','));
   
   return rows.join('\n');
 }
@@ -114,12 +140,13 @@ function toTable(data) {
 scrapeBtn.addEventListener('click', async () => {
   setStatus('Scraping portfolio...', 'info');
   scrapeBtn.disabled = true;
+  resetPortfolioState();
   
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     
-    if (!tab.url?.includes('etoro.com')) {
-      setStatus('Please open etoro.com first', 'error');
+    if (!tab.url?.includes('etoro.com/portfolio')) {
+      setStatus('Please open your eToro Portfolio page first.', 'error');
       scrapeBtn.disabled = false;
       return;
     }
@@ -127,6 +154,12 @@ scrapeBtn.addEventListener('click', async () => {
     const response = await chrome.tabs.sendMessage(tab.id, { action: 'scrapePortfolio' });
     
     if (response) {
+      if (response.errors && response.errors.length > 0) {
+        setStatus(`Error: ${response.errors.join(', ')}`, 'error');
+        scrapeBtn.disabled = false;
+        return;
+      }
+
       portfolioData = response;
       const count = response.positions?.length || 0;
       
@@ -136,13 +169,16 @@ scrapeBtn.addEventListener('click', async () => {
         showPreview(response);
       } else {
         setStatus('No positions found. Make sure you\'re on the Portfolio page and scroll to load all positions.', 'error');
+        resetPortfolioState();
       }
     } else {
       setStatus('No response. Try refreshing the page.', 'error');
+      resetPortfolioState();
     }
   } catch (error) {
     console.error('Scrape error:', error);
     setStatus(`Error: ${error.message}`, 'error');
+    resetPortfolioState();
   }
   
   scrapeBtn.disabled = false;
