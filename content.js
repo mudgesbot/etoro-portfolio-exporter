@@ -209,23 +209,57 @@
     if (!str) return null;
     const negative = str.includes('-');
     str = str.replace(/[^0-9,.\-]/g, '');
+    if (!str || str === '-') return null;
+    
     const lastComma = str.lastIndexOf(',');
     const lastDot = str.lastIndexOf('.');
+    const commaCount = (str.match(/,/g) || []).length;
+    const dotCount = (str.match(/\./g) || []).length;
 
+    // Both comma and dot present - last one is decimal separator
     if (lastComma !== -1 && lastDot !== -1) {
       if (lastComma > lastDot) {
+        // EU format: 1.234,56
         str = str.replace(/\./g, '').replace(',', '.');
       } else {
+        // US format: 1,234.56
         str = str.replace(/,/g, '');
       }
     } else if (lastComma !== -1) {
-      if (/,\d{1,2}$/.test(str)) {
-        str = str.replace(',', '.');
+      // Only comma - EU decimal or thousands?
+      // EU decimal if: starts with 0, OR single comma with >2 digits after, OR multiple commas (can't be decimal)
+      const afterComma = str.substring(lastComma + 1);
+      const beforeComma = str.substring(0, lastComma).replace('-', '');
+      
+      if (commaCount === 1) {
+        // Single comma - could be decimal
+        // It's EU decimal if: afterComma has != 3 digits, OR beforeComma is just 0-2 digits
+        if (afterComma.length !== 3 || beforeComma.length <= 2) {
+          // EU decimal: 0,459259 or 12,586 or 78,375499
+          str = str.replace(',', '.');
+        } else {
+          // Likely thousands: 1,234 (exactly 3 digits after, >2 before)
+          str = str.replace(/,/g, '');
+        }
       } else {
+        // Multiple commas = thousands separators (can't have multiple decimal points)
         str = str.replace(/,/g, '');
       }
     } else if (lastDot !== -1) {
-      if (!/\.\d{1,2}$/.test(str)) {
+      // Only dot - US decimal or EU thousands?
+      const afterDot = str.substring(lastDot + 1);
+      const beforeDot = str.substring(0, lastDot).replace('-', '');
+      
+      if (dotCount === 1) {
+        // Single dot - could be decimal
+        if (afterDot.length !== 3 || beforeDot.length <= 2) {
+          // US decimal: 0.459259 or 12.586 - keep as is
+        } else {
+          // Might be EU thousands: 1.234 - but we'll treat as decimal for safety
+          // (ambiguous case, default to decimal)
+        }
+      } else {
+        // Multiple dots = EU thousands: 1.234.567
         str = str.replace(/\./g, '');
       }
     }
