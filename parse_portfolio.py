@@ -31,7 +31,7 @@ def get_llm_client():
         resp = requests.get('http://localhost:11434/api/tags', timeout=2)
         if resp.status_code == 200:
             return 'ollama', None
-    except:
+    except Exception:
         pass
     
     # Try OpenAI
@@ -54,6 +54,38 @@ def get_llm_client():
     
     return None, None
 
+def validate_llm_result(result: dict) -> dict:
+    """Validate and normalize the LLM response to expected schema."""
+    if not isinstance(result, dict):
+        raise ValueError("LLM response is not a JSON object")
+
+    # Ensure positions is a list
+    positions = result.get('positions')
+    if positions is not None and not isinstance(positions, list):
+        raise ValueError("'positions' must be a list")
+    if positions is None:
+        result['positions'] = []
+
+    # Validate each position is a dict with at minimum a symbol
+    validated = []
+    for p in result['positions']:
+        if not isinstance(p, dict):
+            continue
+        if not p.get('symbol'):
+            continue
+        validated.append(p)
+    result['positions'] = validated
+
+    # Ensure top-level string fields are strings or null
+    for field in ('portfolio_value', 'total_profit_loss', 'total_profit_loss_percent',
+                  'extraction_confidence', 'notes', 'available_cash'):
+        val = result.get(field)
+        if val is not None and not isinstance(val, str):
+            result[field] = str(val)
+
+    return result
+
+
 def parse_with_ollama(raw_data: dict) -> dict:
     """Parse using local Ollama."""
     import requests
@@ -73,7 +105,8 @@ def parse_with_ollama(raw_data: dict) -> dict:
     
     if response.status_code == 200:
         result = response.json()
-        return json.loads(result['response'])
+        parsed = json.loads(result['response'])
+        return validate_llm_result(parsed)
     else:
         raise Exception(f"Ollama error: {response.text}")
 
@@ -91,7 +124,8 @@ def parse_with_openai(client, raw_data: dict) -> dict:
         temperature=0
     )
     
-    return json.loads(response.choices[0].message.content)
+    parsed = json.loads(response.choices[0].message.content)
+    return validate_llm_result(parsed)
 
 def parse_with_anthropic(client, raw_data: dict) -> dict:
     """Parse using Anthropic API."""
@@ -111,7 +145,8 @@ def parse_with_anthropic(client, raw_data: dict) -> dict:
     start = text.find('{')
     end = text.rfind('}') + 1
     if start >= 0 and end > start:
-        return json.loads(text[start:end])
+        parsed = json.loads(text[start:end])
+        return validate_llm_result(parsed)
     raise Exception("No JSON found in response")
 
 def build_prompt(raw_data: dict) -> str:
