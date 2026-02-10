@@ -281,3 +281,11 @@ chrome.tabs.query({ active: true, currentWindow: true }, ([tab]) => {
     setStatus('Navigate to Portfolio page for best results.', 'info');
   }
 });
+
+// Export for testing (no-op in browser where module is undefined)
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = {
+    sanitizeCsvCell, csvEscape, toCSV, toTable,
+    getCurrencySymbol, getTotalPL
+  };
+}

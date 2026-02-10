@@ -182,19 +182,8 @@
     // Unified currency+sign pattern: handles both "€-123" and "-€123"
     const plPattern = `(-?${symEsc}-?[\\d,.]+)`;
 
-    // Pattern 1: Smart Portfolio - "AI-Revolution Artificial Intelligence Revolution €235.80"
-    const smartRe = new RegExp(`^([A-Za-z-]+)\\s+(.+?)\\s+${plPattern}$`);
-    const smartMatch = text.match(smartRe);
-    if (smartMatch && !text.includes('Long') && !text.includes('Short')) {
-      position.symbol = smartMatch[1];
-      position.name = smartMatch[2];
-      position.type = 'Smart Portfolio';
-      position.pl = smartMatch[3];
-      position.plValue = parseCurrencyValue(smartMatch[3]);
-      return position;
-    }
-
-    // Pattern 2: Copy Trader - "AnoKam Kamil Florowski €86.40"
+    // Pattern 1: Copy Trader - "AnoKam Kamil Florowski €86.40"
+    // Checked before Smart Portfolio because it's more specific (exact "Firstname Lastname" format)
     const copyRe = new RegExp(`^([A-Za-z]+)\\s+([A-Z][a-z]+\\s+[A-Z][a-z]+)\\s+${plPattern}$`);
     const copyMatch = text.match(copyRe);
     if (copyMatch) {
@@ -203,6 +192,18 @@
       position.type = 'Copy Trading';
       position.pl = copyMatch[3];
       position.plValue = parseCurrencyValue(copyMatch[3]);
+      return position;
+    }
+
+    // Pattern 2: Smart Portfolio - "AI-Revolution Artificial Intelligence Revolution €235.80"
+    const smartRe = new RegExp(`^([A-Za-z-]+)\\s+(.+?)\\s+${plPattern}$`);
+    const smartMatch = text.match(smartRe);
+    if (smartMatch && !text.includes('Long') && !text.includes('Short')) {
+      position.symbol = smartMatch[1];
+      position.name = smartMatch[2];
+      position.type = 'Smart Portfolio';
+      position.pl = smartMatch[3];
+      position.plValue = parseCurrencyValue(smartMatch[3]);
       return position;
     }
 
@@ -343,6 +344,15 @@
     if (line.includes('p/l') && line.includes('open')) return true;
     if (line.includes('buy') && line.includes('sell') && line.includes('trade')) return true;
     return false;
+  }
+
+  // Export for testing (no-op in browser where module is undefined)
+  if (typeof module !== 'undefined' && module.exports) {
+    module.exports = {
+      parseNumber, parseCurrencyValue, parsePositionText,
+      classifyAssetType, calculatePLPercent, detectCurrency,
+      getCurrencySymbol, isHeaderLine, CRYPTO_SYMBOLS
+    };
   }
 
   console.log('eToro Portfolio Exporter loaded');
