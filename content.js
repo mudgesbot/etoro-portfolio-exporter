@@ -4,6 +4,27 @@
 (function() {
   'use strict';
 
+  const CRYPTO_SYMBOLS = new Set([
+    'BTC', 'ETH', 'XRP', 'ADA', 'SOL', 'DOGE', 'DOT', 'AVAX', 'LINK',
+    'MATIC', 'SHIB', 'UNI', 'LTC', 'ATOM', 'XLM', 'ALGO', 'NEAR', 'FTM',
+    'MANA', 'SAND', 'AXS', 'APE', 'FIL', 'AAVE', 'EOS', 'XTZ', 'IOTA',
+    'NEO', 'DASH', 'ETC', 'MKR', 'COMP', 'ZEC', 'BAT', 'ENJ', 'FLOW',
+    'CHZ', 'CRO', 'GRT', 'SNX', 'SUSHI', 'YFI', 'BNB', 'TRX', 'BCH',
+    'HBAR', 'VET', 'THETA', 'ICP', 'FTT', 'EGLD', 'ONE', 'GALA', 'LRC',
+    'IMX', 'CRV', 'JASMY', 'KSM', 'ZIL', 'RUNE', 'CELO', 'STORJ', 'ANKR',
+    'LUNC', 'APT', 'ARB', 'OP', 'SUI', 'SEI', 'TIA', 'JUP', 'PEPE', 'WIF',
+    'BONK', 'FLOKI', 'RNDR', 'INJ', 'STX', 'ORDI'
+  ]);
+
+  // Currency symbol patterns for auto-detection
+  const CURRENCY_MAP = {
+    '€': 'EUR',
+    '$': 'USD',
+    '£': 'GBP',
+    'A$': 'AUD',
+    'C$': 'CAD',
+  };
+
   chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (sender?.id !== chrome.runtime.id) {
       return false;
@@ -15,11 +36,40 @@
     return true;
   });
 
+  function detectCurrency(pageText) {
+    // Look for currency symbols near numbers on the page
+    const eurMatch = pageText.match(/€[\d,.\s]/g);
+    const usdMatch = pageText.match(/\$[\d,.\s]/g);
+    const gbpMatch = pageText.match(/£[\d,.\s]/g);
+
+    const counts = {
+      'EUR': (eurMatch || []).length,
+      'USD': (usdMatch || []).length,
+      'GBP': (gbpMatch || []).length,
+    };
+
+    let best = 'USD';
+    let bestCount = 0;
+    for (const [currency, count] of Object.entries(counts)) {
+      if (count > bestCount) {
+        best = currency;
+        bestCount = count;
+      }
+    }
+    return best;
+  }
+
+  function getCurrencySymbol(currency) {
+    const symbols = { 'EUR': '€', 'USD': '$', 'GBP': '£', 'AUD': 'A$', 'CAD': 'C$' };
+    return symbols[currency] || '$';
+  }
+
   function scrapePortfolio() {
     const result = {
       timestamp: new Date().toISOString(),
       url: window.location.href,
-      currency: 'EUR',
+      currency: 'USD',
+      currencySymbol: '$',
       portfolio: {
         totalValue: null,
         totalPL: null,
@@ -37,36 +87,47 @@
 
       // Get visible text content
       const pageText = document.body.innerText;
-      
+
+      // Auto-detect currency from page content
+      result.currency = detectCurrency(pageText);
+      result.currencySymbol = getCurrencySymbol(result.currency);
+      const sym = result.currencySymbol;
+      const symEsc = sym.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
       // Try to extract total values from page
-      const totalMatch = pageText.match(/€([\d,]+\.?\d*)/g);
+      const totalPattern = new RegExp(symEsc + '([\\d,]+\\.?\\d*)', 'g');
+      const totalMatch = pageText.match(totalPattern);
       if (totalMatch && totalMatch.length >= 2) {
-        // Usually last big numbers are totals
         result.portfolio.rawTotals = totalMatch.slice(-4);
       }
 
-      // Extract from grid data elements
+      // Extract from grid data elements (primary method)
       const gridItems = document.querySelectorAll('[class*="grid"], [class*="row"], [class*="position"], [class*="instrument"]');
-      
+      const parsedFromGrid = new Set();
+
       gridItems.forEach(el => {
         const text = el.innerText.trim();
         if (!text || text.length < 10 || text.length > 500) return;
-        
+
         // Skip navigation/header elements
         if (text.includes('Home') && text.includes('Wallet')) return;
         if (isHeaderLine(text)) return;
-        
-        const position = parsePositionText(text);
+
+        const position = parsePositionText(text, sym);
         if (position && position.symbol) {
           result.positions.push(position);
+          parsedFromGrid.add(text.substring(0, 80));
         }
       });
 
-      // Also try parsing from full page text
+      // Fallback: parse from full page text (only lines not already captured)
       const lines = pageText.split('\n').filter(l => l.trim());
       lines.forEach(line => {
         if (isHeaderLine(line)) return;
-        const position = parsePositionText(line);
+        // Skip lines that were likely already parsed from grid elements
+        if (parsedFromGrid.has(line.trim().substring(0, 80))) return;
+
+        const position = parsePositionText(line, sym);
         if (position && position.symbol) {
           result.positions.push(position);
         }
@@ -75,10 +136,9 @@
       // Deduplicate identical positions (same symbol + units + avgOpen = same trade)
       const seen = new Set();
       result.positions = result.positions.filter(p => {
-        // Create unique key from symbol, units, and avgOpen
         const key = `${p.symbol}|${p.units}|${p.avgOpen}`;
         if (seen.has(key)) {
-          return false; // Duplicate
+          return false;
         }
         seen.add(key);
         return true;
@@ -86,13 +146,9 @@
 
       // Calculate totals if we have positions
       if (result.positions.length > 0) {
-        let totalPL = 0;
-        result.positions.forEach(p => {
-          if (p.plValue) {
-            totalPL += p.plValue;
-          }
-        });
-        result.portfolio.totalPL = totalPL.toFixed(2);
+        result.portfolio.totalPL = result.positions
+          .reduce((sum, p) => sum + (p.plValue || 0), 0)
+          .toFixed(2);
       }
 
     } catch (error) {
@@ -102,7 +158,7 @@
     return result;
   }
 
-  function parsePositionText(text) {
+  function parsePositionText(text, currencySymbol) {
     const position = {
       symbol: null,
       name: null,
@@ -118,32 +174,41 @@
 
     // Clean up text
     text = text.replace(/Close Trade/g, '').replace(/\s+/g, ' ').trim();
-    
+
+    // Escape currency symbol for use in regex
+    const sym = currencySymbol || '€';
+    const symEsc = sym.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+    // Unified currency+sign pattern: handles both "€-123" and "-€123"
+    const plPattern = `(-?${symEsc}-?[\\d,.]+)`;
+
     // Pattern 1: Smart Portfolio - "AI-Revolution Artificial Intelligence Revolution €235.80"
-    const smartMatch = text.match(/^([A-Za-z-]+)\s+(.+?)\s+(€-?[\d,.]+)$/);
-    if (smartMatch && !text.includes('Long')) {
+    const smartRe = new RegExp(`^([A-Za-z-]+)\\s+(.+?)\\s+${plPattern}$`);
+    const smartMatch = text.match(smartRe);
+    if (smartMatch && !text.includes('Long') && !text.includes('Short')) {
       position.symbol = smartMatch[1];
       position.name = smartMatch[2];
       position.type = 'Smart Portfolio';
       position.pl = smartMatch[3];
-      position.plValue = parseEuroValue(smartMatch[3]);
+      position.plValue = parseCurrencyValue(smartMatch[3]);
       return position;
     }
 
-    // Pattern 2: Copy Trader - "AnoKam Kamil Florowski €86.40"  
-    const copyMatch = text.match(/^([A-Za-z]+)\s+([A-Z][a-z]+\s+[A-Z][a-z]+)\s+(€-?[\d,.]+)$/);
+    // Pattern 2: Copy Trader - "AnoKam Kamil Florowski €86.40"
+    const copyRe = new RegExp(`^([A-Za-z]+)\\s+([A-Z][a-z]+\\s+[A-Z][a-z]+)\\s+${plPattern}$`);
+    const copyMatch = text.match(copyRe);
     if (copyMatch) {
       position.symbol = copyMatch[1];
       position.name = copyMatch[2];
       position.type = 'Copy Trading';
       position.pl = copyMatch[3];
-      position.plValue = parseEuroValue(copyMatch[3]);
+      position.plValue = parseCurrencyValue(copyMatch[3]);
       return position;
     }
 
     // Pattern 3: Regular position - "SYMBOL Name Price Change (%) Units Long AvgOpen €P/L"
-    // Example: "CEMS.DE iShares Edge MSCI Europe Value Factor UCITS ETF 12.563 0.135 (1.09%) 78.375499 Long 10.980 €138.87"
-    const stockMatch = text.match(/^([A-Z0-9.]+)\s+(.+?)\s+([\d,.]+)\s+(-?[\d,.]+)\s+\((-?[\d,.]+)%\)\s+([\d,.]+)\s+(Long|Short)\s+([\d,.]+)\s+(-?€[\d,.]+)/);
+    const stockRe = new RegExp(`^([A-Z0-9.]+)\\s+(.+?)\\s+([\\d,.]+)\\s+(-?[\\d,.]+)\\s+\\((-?[\\d,.]+)%\\)\\s+([\\d,.]+)\\s+(Long|Short)\\s+([\\d,.]+)\\s+${plPattern}`);
+    const stockMatch = text.match(stockRe);
     if (stockMatch) {
       position.symbol = stockMatch[1];
       position.name = stockMatch[2].trim();
@@ -154,32 +219,17 @@
       position.direction = stockMatch[7];
       position.avgOpen = parseNumber(stockMatch[8]);
       position.pl = stockMatch[9];
-      position.plValue = parseEuroValue(stockMatch[9]);
-      
-      // Determine type
-      if (position.symbol.includes('.DE') || position.symbol.includes('.L') || position.symbol.includes('.NV')) {
-        position.type = position.name.toLowerCase().includes('etf') ? 'ETF' : 'Stock';
-      } else if (['ETH', 'BTC', 'XRP', 'ADA', 'SOL'].includes(position.symbol)) {
-        position.type = 'Crypto';
-      } else if (position.name.toLowerCase().includes('etf') || position.name.toLowerCase().includes('spdr')) {
-        position.type = 'ETF';
-      } else {
-        position.type = 'Stock';
-      }
-      
-      // Calculate P/L percentage
-      if (position.avgOpen && position.units) {
-        const invested = position.avgOpen * position.units;
-        if (invested > 0) {
-          position.plPercent = ((position.plValue / invested) * 100).toFixed(2);
-        }
-      }
-      
+      position.plValue = parseCurrencyValue(stockMatch[9]);
+
+      position.type = classifyAssetType(position.symbol, position.name);
+      position.plPercent = calculatePLPercent(position);
+
       return position;
     }
 
     // Pattern 4: Simpler format without change data
-    const simpleMatch = text.match(/^([A-Z0-9.]+)\s+(.+?)\s+([\d,.]+)\s+([\d,.]+)\s+(Long|Short)\s+([\d,.]+)\s+(-?€[\d,.]+)/);
+    const simpleRe = new RegExp(`^([A-Z0-9.]+)\\s+(.+?)\\s+([\\d,.]+)\\s+([\\d,.]+)\\s+(Long|Short)\\s+([\\d,.]+)\\s+${plPattern}`);
+    const simpleMatch = text.match(simpleRe);
     if (simpleMatch) {
       position.symbol = simpleMatch[1];
       position.name = simpleMatch[2].trim();
@@ -188,15 +238,38 @@
       position.direction = simpleMatch[5];
       position.avgOpen = parseNumber(simpleMatch[6]);
       position.pl = simpleMatch[7];
-      position.plValue = parseEuroValue(simpleMatch[7]);
-      position.type = 'Stock';
+      position.plValue = parseCurrencyValue(simpleMatch[7]);
+      position.type = classifyAssetType(position.symbol, position.name);
+      position.plPercent = calculatePLPercent(position);
       return position;
     }
 
     return null;
   }
 
-  function parseEuroValue(str) {
+  function classifyAssetType(symbol, name) {
+    const nameLower = (name || '').toLowerCase();
+    if (symbol.includes('.DE') || symbol.includes('.L') || symbol.includes('.NV') ||
+        symbol.includes('.PA') || symbol.includes('.AS') || symbol.includes('.MI')) {
+      return nameLower.includes('etf') ? 'ETF' : 'Stock';
+    }
+    if (CRYPTO_SYMBOLS.has(symbol)) {
+      return 'Crypto';
+    }
+    if (nameLower.includes('etf') || nameLower.includes('spdr') || nameLower.includes('ishares') || nameLower.includes('vanguard')) {
+      return 'ETF';
+    }
+    return 'Stock';
+  }
+
+  function calculatePLPercent(position) {
+    if (!position.avgOpen || !position.units) return null;
+    const invested = position.avgOpen * position.units;
+    if (invested <= 0) return null;
+    return ((position.plValue / invested) * 100).toFixed(2);
+  }
+
+  function parseCurrencyValue(str) {
     if (!str) return 0;
     const num = parseNumber(str);
     if (num === null) return 0;
@@ -207,10 +280,14 @@
     if (value === null || value === undefined) return null;
     let str = String(value).trim();
     if (!str) return null;
+
+    // Normalize unicode minus variants to ASCII hyphen
+    str = str.replace(/[\u2212\u2013\u2014\u2015\uFE58\uFF0D]/g, '-');
+
     const negative = str.includes('-');
     str = str.replace(/[^0-9,.\-]/g, '');
     if (!str || str === '-') return null;
-    
+
     const lastComma = str.lastIndexOf(',');
     const lastDot = str.lastIndexOf('.');
     const commaCount = (str.match(/,/g) || []).length;
@@ -226,38 +303,24 @@
         str = str.replace(/,/g, '');
       }
     } else if (lastComma !== -1) {
-      // Only comma - EU decimal or thousands?
-      // EU decimal if: starts with 0, OR single comma with >2 digits after, OR multiple commas (can't be decimal)
       const afterComma = str.substring(lastComma + 1);
       const beforeComma = str.substring(0, lastComma).replace('-', '');
-      
+
       if (commaCount === 1) {
-        // Single comma - could be decimal
-        // It's EU decimal if: afterComma has != 3 digits, OR beforeComma is just 0-2 digits
         if (afterComma.length !== 3 || beforeComma.length <= 2) {
           // EU decimal: 0,459259 or 12,586 or 78,375499
           str = str.replace(',', '.');
         } else {
-          // Likely thousands: 1,234 (exactly 3 digits after, >2 before)
+          // Likely thousands: 1,234
           str = str.replace(/,/g, '');
         }
       } else {
-        // Multiple commas = thousands separators (can't have multiple decimal points)
+        // Multiple commas = thousands separators
         str = str.replace(/,/g, '');
       }
     } else if (lastDot !== -1) {
-      // Only dot - US decimal or EU thousands?
-      const afterDot = str.substring(lastDot + 1);
-      const beforeDot = str.substring(0, lastDot).replace('-', '');
-      
       if (dotCount === 1) {
-        // Single dot - could be decimal
-        if (afterDot.length !== 3 || beforeDot.length <= 2) {
-          // US decimal: 0.459259 or 12.586 - keep as is
-        } else {
-          // Might be EU thousands: 1.234 - but we'll treat as decimal for safety
-          // (ambiguous case, default to decimal)
-        }
+        // Single dot - treat as decimal (safe default)
       } else {
         // Multiple dots = EU thousands: 1.234.567
         str = str.replace(/\./g, '');
@@ -281,5 +344,6 @@
     if (line.includes('buy') && line.includes('sell') && line.includes('trade')) return true;
     return false;
   }
+
   console.log('eToro Portfolio Exporter loaded');
 })();
